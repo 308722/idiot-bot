@@ -91,9 +91,75 @@ async def help_command(ctx):
     )
     await ctx.send(help_text)
 
+#manual join
+@bot.command(name="join")
+@is_music_channel()
+async def join_command(ctx):
+    if ctx.author.voice:
+        channel = ctx.author.voice.channel
+        await channel.connect()
+        await ctx.send(f"🔊 **{channel.name}** 채널에 접속했어요!")
+    else:
+        await ctx.send("❌ 먼저 음성 채널에 들어가주세요!")
 
 
+#play 기능
+@bot.command(name="play")
+@is_music_channel()
+async def play_command(ctx, *, search: str):
+    if not ctx.author.voice or not ctx.author.voice.channel:
+        await ctx.send("❌ 먼저 음성 채널에 접속해주세요.")
+        return
+    
+    voice_channel = ctx.author.voice.channel
 
+    if ctx.voice_client is None:
+        vc = await voice_channel.connect()
+    else:
+        vc = ctx.voice_client
+        if vc.channel != voice_channel:
+            await vc.move_to(voice_channel)
+
+    ydl_option = {
+        'format': "bestaudio/best",
+        'noplaylist': True,
+        'quiet': True,
+        'default_search': 'ytsearch'
+    }
+    with yt_dlp.YoutubeDL(ydl_option) as ydl:
+        try:
+            info = ydl.extract_info(search, download=False)
+            if 'entries' in info:
+                info = info['entries'][0]
+
+        except Exception as e:
+            await ctx.send("❌ 유효한 URL 또는 검색어를 입력해주세요.")
+            return
+        
+        url = info['url']
+        title = info.get('title', 'Unknown title')
+
+        try:
+            source = await discord.FFmpegOpusAudio.from_probe(
+                url,
+                executable="/opt/homebrew/bin/ffmpeg",
+                before_options="-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5",
+                options="-vn"
+                )
+        
+        except Exception as e:
+            print("⚠️ FFmpeg probe 실패, fallback 중:", e)
+
+            source = discord.FFmpegOpusAudio(url,
+            executable="/opt/homebrew/bin/ffmpeg",
+            before_options="-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5",
+            options="-vn"
+            )
+
+        ctx.voice_client.stop()
+        ctx.voice_client.play(source)
+
+        await ctx.send(f"▶️ **{title}** 재생 중입니다!")
 
 #봇 실행 함수. 항상 맨 밑에 들어가야함.
 bot.run(TOKEN)
