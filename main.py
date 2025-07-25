@@ -6,6 +6,7 @@ from discord.ext import commands
 import yt_dlp
 import asyncio
 from discord.ext.commands import check, CheckFailure
+from discord.utils import get
 
 
 #모든 명령에 대해 실패 발생 시, 알려주는거 정의
@@ -67,6 +68,40 @@ music_queue = []
 async def on_ready():
     print(f"{bot.user.name}이 서버에 들어왔습니다! ")
 
+#에러 말하기
+async def on_command_error(ctx, error):
+    if isinstance(error, commands.CheckFailure):
+        await ctx.send("🚫 이 채널에선 음악 명령어를 사용할 수 없어요!\n지정된 음악 채널에서 사용해주세요.")
+
+    else:
+        await ctx.send("⚠️ 알 수 없는 명령어입니다")
+        print(f"⚠️ 알 수 없는 에러 발생: {error}")
+
+#혼자 남았을 때 나가기
+async def on_voice_state_update(member, before, after):
+    # 봇이 아니고, 음성 채널에서 나갔을 때
+    if member.bot:
+        return
+
+    voice_client = discord.utils.get(bot.voice_clients, guild=member.guild)
+    if voice_client is None or not voice_client.is_connected():
+        return
+
+    # 봇이 있는 음성 채널
+    channel = voice_client.channel
+
+    # 유저가 나간 후, 봇만 남았는지 확인
+    if len([m for m in channel.members if not m.bot]) == 0:
+        await asyncio.sleep(10)
+        if len([m for m in channel.members if not m.bot]) == 0:
+            await voice_client.disconnect()
+            config = load_config()
+            text_channel_id = config.get(str(member.guild.id))
+            if text_channel_id:
+                text_channel = bot.get_channel(text_channel_id)
+                if text_channel:
+                    await text_channel.send("👋 아무도 없어서 음성 채널을 떠났어요.")
+
 
 #봇 명령 전용 채널 등록
 @bot.command(name="setchannel")
@@ -96,6 +131,10 @@ async def help_command(ctx):
         "```\n"
         "+setchannel       ▶ 원하는 채널에서 입력 시, 해당 채널을 봇 명령 채널로 등록 (관리자 전용)\n"
         "+help             ▶ 명령어 목록 보기\n"
+        "+play             ▶ [url 또는 노래 제목]을 붙여 노래 재생 \n"
+        "+pause            ▶ 일시정지\n"
+        "+resume           ▶ 일시정지 해제\n"
+
         # 이후 추가될 명령어도 여기에 계속 추가할 수 있어
         "```\n"
     )
@@ -194,15 +233,30 @@ async def play_next(ctx):
         next_song = music_queue.pop(0)
         current_song = next_song["title"]
 
-        source = discord.FFmpegOpusAudio(
-            next_song["url"],
-            executable="/opt/homebrew/bin/ffmpeg",
-            before_options="-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5",
-            options="-vn"
-        )
+        try:
+            source = discord.FFmpegOpusAudio(
+                next_song["url"],
+                executable="/opt/homebrew/bin/ffmpeg",
+                before_options="-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5",
+                options="-vn"
+            )
 
-        ctx.voice_client.play(source, after=lambda e: bot.loop.create_task(play_next(ctx)))
-        await ctx.send(f"▶️ **{current_song}** 재생 중입니다!")
+            vc = discord.utils.get(bot.voice_clients, guild=ctx.guild)
+            if not vc or not vc.is_connected():
+                await ctx.send("❌ 봇이 음성 채널에 연결되어 있지 않아요.")
+                return
+
+            try:
+                vc.play(source, after=lambda e: asyncio.run_coroutine_threadsafe(play_next(ctx), bot.loop))
+                await ctx.send(f"▶️ **{current_song}** 재생 중입니다!")
+            except Exception as e:
+                print(f"오디오 재생 실패: {e}")
+                await ctx.send("❌ 다음 곡 재생 중 오류가 발생했어요.")
+
+        except Exception as e:
+            print(f"FFmpeg 로딩 실패: {e}")
+            await ctx.send("❌ 오디오 스트림을 불러오는 데 실패했어요.")
+            current_song = None
     else:
         current_song = None
 
@@ -223,7 +277,7 @@ async def queue_command(ctx):
 
     msg = "🎵 **현재 재생 중:**\n"
     if ctx.voice_client.is_playing():
-        # 플레이 중인 곡 제목은 따로 저장해둬야 해 (예: current_song 변수)
+        # 플레이 중인 곡 제목은 따로 저장(예: current_song)
         msg += f"▶️ {current_song}\n"
     else:
         msg += "▶️ 없음\n"
@@ -237,15 +291,112 @@ async def queue_command(ctx):
 
     await ctx.send(msg)
 
-#에러 말하기
-@bot.event
-async def on_command_error(ctx, error):
-    if isinstance(error, commands.CheckFailure):
-        await ctx.send("🚫 이 채널에선 음악 명령어를 사용할 수 없어요!\n지정된 음악 채널에서 사용해주세요.")
+#pause
+@bot.command(name="pause")
+@is_music_channel()
+async def pause_command(ctx):
+    if not ctx.author.voice or not ctx.author.voice.channel:
+        await ctx.send("❌ 먼저 음성 채널에 접속해주세요.")
+        return
 
+    if not ctx.voice_client or not ctx.voice_client.is_connected():
+        await ctx.send("❌ 봇이 음성 채널에 연결되어 있지 않아요.")
+        return
+
+    if ctx.voice_client.is_playing():
+        ctx.voice_client.pause()
+        await ctx.send("⏸️ 노래를 일시정지했어요!")
     else:
-        await ctx.send("⚠️ 알 수 없는 오류가 발생했어요. 관리자에게 문의해주세요.")
-        print(f"⚠️ 알 수 없는 에러 발생: {error}")
+        await ctx.send("⚠️ 현재 재생 중인 노래가 없어요.")
+
+
+
+#stop
+@bot.command(name="stop")
+@is_music_channel()
+async def stop_command(ctx):
+    global music_queue, current_song
+
+    # 음성 채널에 접속하지 않은 경우
+    if not ctx.voice_client or not ctx.voice_client.is_connected():
+        await ctx.send("❌ 봇이 음성 채널에 연결되어 있지 않아요.")
+        return
+
+    # 재생 중이면 중지
+    if ctx.voice_client.is_playing() or ctx.voice_client.is_paused():
+        ctx.voice_client.stop()
+
+    # 큐 비우기
+    music_queue.clear()
+    current_song = None
+
+    # 채널 나가기
+    await ctx.voice_client.disconnect()
+    await ctx.send("⏹️ 재생을 중지하고 음성 채널에서 나갔어요.")
+
+        
+#resume
+@bot.command(name="resume")
+@is_music_channel()
+async def resume_command(ctx):
+    if not ctx.author.voice or not ctx.author.voice.channel:
+        await ctx.send("❌ 먼저 음성 채널에 접속해주세요.")
+        return
+
+    vc = get(bot.voice_clients, guild=ctx.guild)
+
+    if not vc or not vc.is_connected():
+        await ctx.send("❌ 봇이 음성 채널에 연결되어 있지 않아요.")
+        return
+
+    if vc.is_paused():
+        vc.resume()
+        await ctx.send("▶️ 재생을 다시 시작했어요!")
+    elif vc.is_playing():
+        await ctx.send("▶️ 이미 재생 중이에요!")
+    else:
+        await ctx.send("⚠️ 현재 재생 중인 노래가 없어요.")
+
+#next_song
+@bot.command(name="next")
+@is_music_channel()
+async def next_command(ctx):
+    if not ctx.author.voice or not ctx.author.voice.channel:
+        await ctx.send("❌ 먼저 음성 채널에 접속해주세요.")
+        return
+    
+    vc = discord.utils.get(bot.voice_clients, guild=ctx.guild)
+
+    if not vc or not vc.is_connected():
+        await ctx.send("❌ 봇이 음성 채널에 연결되어 있지 않아요.")
+        return
+
+    # ✅ 큐가 비어 있으면 재생 끊지 말고 메시지만
+    if not music_queue:
+        await ctx.send("📭 재생 목록에 다음 곡이 없어요!")
+        return
+
+    # ✅ 큐가 있다면 현재 곡 중지 → play_next 실행됨
+    if vc.is_playing() or vc.is_paused():
+        vc.stop()
+        await ctx.send("⏭️ 다음 곡으로 넘어갈게요!")
+    else:
+        await ctx.send("⚠️ 현재 재생 중인 노래가 없어요.")
+
+#previous_song(back)
+#shuffle
+#all_repeat
+#one_repeat
+#playlist
+#emoji_control
+#skip
+#auto_leave
+#delete_song
+#delete_all
+
+
+
+
 
 #봇 실행 함수. 항상 맨 밑에 들어가야함.
 bot.run(TOKEN)
