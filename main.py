@@ -1,13 +1,16 @@
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 import os
 import json
 from dotenv import load_dotenv
 import discord
 from discord.ext import commands
 import yt_dlp
-import asyncio
 from discord.ext.commands import check, CheckFailure
 from discord.utils import get
+import random
 
+executor = ThreadPoolExecutor(max_workers=5) # 워커 수는 필요에 따라 조절
 
 #모든 명령에 대해 실패 발생 시, 알려주는거 정의
 def is_music_channel():
@@ -58,10 +61,38 @@ print(TOKEN)
 #명령 접두사
 intents = discord.Intents.default()
 intents.message_content = True
+intents.members = True
+intents.voice_states = True
 bot = commands.Bot(command_prefix="+", intents=intents, help_command=None)
 
 #music queue
 music_queue = []
+current_song = None
+repeat_mode = "off"
+
+#반복 재생 전역 설정
+repeat_mode = None
+
+#봇이 음성방 나가면 반복 모드 Off 기타 다른 것도 가능
+def reset_music_state():
+    global repeat_mode
+    repeat_mode = None
+    current_song = None
+    music_queue.clear()
+
+#음악의 분, 초 표현
+def format_duration(seconds):
+    if seconds is None:
+        return "N/A"
+    minutes, secs = divmod(seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+
+    if hours > 0:
+        return f"{int(hours):02}:{int(minutes):02}:{int(secs):02}"
+    return f"{int(minutes):02}:{int(secs):02}"
+
+# 사용 예:
+reset_music_state()  # stop할 때, 혼자 남았을 때 등
 
 #봇 접속시 뜨는 멘트
 @bot.event
@@ -70,14 +101,26 @@ async def on_ready():
 
 #에러 말하기
 async def on_command_error(ctx, error):
-    if isinstance(error, commands.CheckFailure):
-        await ctx.send("🚫 이 채널에선 음악 명령어를 사용할 수 없어요!\n지정된 음악 채널에서 사용해주세요.")
+    print(f"DEBUG: on_command_error 호출됨. 에러 타입: {type(error)}, 에러 내용: {error}") # <-- 이 줄이 보이나요?
 
+    if isinstance(error, commands.CheckFailure):
+        print("DEBUG: 에러가 CheckFailure 타입입니다. 디스코드 메시지 전송 시도...")
+        try:
+            await ctx.send("🚫 이 채널에선 음악 명령어를 사용할 수 없어요!\n지정된 음악 채널에서 사용해주세요.")
+            print("DEBUG: Discord 채널로 CheckFailure 메시지 전송 완료 (또는 시도).")
+        except Exception as send_error:
+            print(f"ERROR: Discord 채널로 CheckFailure 메시지 전송 실패: {send_error}")
     else:
-        await ctx.send("⚠️ 알 수 없는 명령어입니다")
+        print("DEBUG: 알 수 없는 에러 타입입니다.")
+        try:
+            await ctx.send("⚠️ 알 수 없는 명령어입니다")
+            print("DEBUG: Discord 채널로 '알 수 없는 명령어' 메시지 전송 완료 (또는 시도).")
+        except Exception as send_error:
+            print(f"ERROR: Discord 채널로 메시지 전송 실패 (알 수 없는 명령어): {send_error}")
         print(f"⚠️ 알 수 없는 에러 발생: {error}")
 
 #혼자 남았을 때 나가기
+@bot.event
 async def on_voice_state_update(member, before, after):
     # 봇이 아니고, 음성 채널에서 나갔을 때
     if member.bot:
@@ -95,13 +138,14 @@ async def on_voice_state_update(member, before, after):
         await asyncio.sleep(10)
         if len([m for m in channel.members if not m.bot]) == 0:
             await voice_client.disconnect()
+            reset_music_state()
+
             config = load_config()
             text_channel_id = config.get(str(member.guild.id))
             if text_channel_id:
                 text_channel = bot.get_channel(text_channel_id)
                 if text_channel:
                     await text_channel.send("👋 아무도 없어서 음성 채널을 떠났어요.")
-
 
 #봇 명령 전용 채널 등록
 @bot.command(name="setchannel")
@@ -131,12 +175,19 @@ async def help_command(ctx):
         "```\n"
         "+setchannel       ▶ 원하는 채널에서 입력 시, 해당 채널을 봇 명령 채널로 등록 (관리자 전용)\n"
         "+help             ▶ 명령어 목록 보기\n"
-        "+play             ▶ [url 또는 노래 제목]을 붙여 노래 재생 \n"
-        "+pause            ▶ 일시정지\n"
-        "+resume           ▶ 일시정지 해제\n"
-
-        # 이후 추가될 명령어도 여기에 계속 추가할 수 있어
-        "```\n"
+        "\n" # 구분선
+        "🎶 **음악 재생 및 관리**\n"
+        "+join             ▶ 봇을 현재 음성 채널로 초대\n"
+        "+play [url/제목]  ▶ 노래 재생 또는 대기열에 추가\n"
+        "+pause            ▶ 현재 재생 중인 곡 일시정지\n"
+        "+resume           ▶ 일시정지된 곡 재생 재개\n"
+        "+stop             ▶ 현재 곡 재생 중지 및 음성 채널에서 봇 퇴장\n"
+        "+next [skip]      ▶ 다음 곡 재생 (현재 곡 스킵)\n"
+        "+queue [list]     ▶ 현재 재생 목록 및 대기열 확인\n"
+        "+shuffle          ▶ 재생 대기열 섞기\n"
+        "+repeat [one/all/off] ▶ 반복 모드 설정 (현재 곡, 전체 큐, 끄기)\n"
+        "```\n" #구분선
+        "ℹ️ **참고:** 모든 음악 명령어는 `+setchannel`로 지정된 채널에서만 작동합니다."
     )
     await ctx.send(help_text)
 
@@ -152,7 +203,7 @@ async def join_command(ctx):
         await ctx.send("❌ 먼저 음성 채널에 들어가주세요!")
 
 
-#play 기능
+# #play 기능
 @bot.command(name="play")
 @is_music_channel()
 async def play_command(ctx, *, search: str):
@@ -170,74 +221,128 @@ async def play_command(ctx, *, search: str):
         vc = ctx.voice_client
         if vc.channel != voice_channel:
             await vc.move_to(voice_channel)
-
+    processing_message = await ctx.send("🔄 노래 정보를 가져오는 중이에요... 잠시만 기다려주세요! \n플레이리스트라면 오래 걸릴 수 있어요!")
     ydl_option = {
-        'format': "bestaudio/best",
-        'noplaylist': True,
+        'format': "bestaudio[ext=webm]+bestaudio[ext=mp4]/bestaudio/best",
+        #'noplaylist': True, # 플레이리스트 전체를 막으려면 이 주석을 해제
         'quiet': True,
-        'default_search': 'ytsearch'
+        'default_search': 'ytsearch',
+        'extract_flat': 'in_playlist' # 플레이리스트의 경우 URL만 빠르게 추출
     }
-    with yt_dlp.YoutubeDL(ydl_option) as ydl:
-        try:
-            info = ydl.extract_info(search, download=False)
-            if 'entries' in info:
-                info = info['entries'][0]
+    
+    try:
+        loop = asyncio.get_event_loop()
+        with yt_dlp.YoutubeDL(ydl_option) as ydl:
+            info = await loop.run_in_executor(executor, lambda: ydl.extract_info(search, download=False))
+            
+        entries_to_process = []
 
-        except Exception as e:
-            await ctx.send("❌ 유효한 URL 또는 검색어를 입력해주세요.")
+        if 'entries' in info and info['entries']:
+            for entry_item in info['entries']:
+                if entry_item.get('_type') == 'url':
+                    try:
+                        nested_info = await loop.run_in_executor(executor, lambda: ydl.extract_info(entry_item['url'], download=False))
+                        entries_to_process.append(nested_info)
+                    except Exception as nested_e:
+                        print(f"플레이리스트 항목 상세 정보 추출 실패: {entry_item.get('title', 'Unknown Title')} - {nested_e}")
+                        await processing_message.edit(content=f"⚠️ 플레이리스트 항목 '{entry_item.get('title', 'Unknown')}'을(를) 처리하지 못했습니다.") # 오류 발생 시 메시지 수정
+                        continue
+                else: #그 외
+                    entries_to_process.append(entry_item)
+        elif 'url' in info:
+            entries_to_process.append(info)
+        else:
+            await processing_message.edit(content="❌ 검색 결과가 없습니다.") # 오류 발생 시 메시지 수정
             return
         
-        url = info['url']
-        title = info.get('title', 'Unknown title')
+        if not entries_to_process:
+            await processing_message.edit(content="❌ 검색 결과가 없습니다.") # 오류 발생 시 메시지 수정
+            return
 
-        def after_playing(error):
-            if error:
-                print(f"🎵 재생 중 오류 발생: {error}")
-            bot.loop.create_task(play_next(ctx))
+    except Exception as e:
+        print(f"yt_dlp 예외: {e}")
+        await processing_message.edit(content="❌ 유효한 URL 또는 검색어를 입력해주세요. (YouTube에서 찾을 수 없거나 접근 문제)") # 오류 발생 시 메시지 수정
+        return
+    
+    await processing_message.delete() # 모든 정보 추출 성공 시 메시지 삭제
 
-        try:
-            source = await discord.FFmpegOpusAudio.from_probe(
-                url,
-                executable="/opt/homebrew/bin/ffmpeg",
-                before_options="-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5",
-                options="-vn"
+    newly_added_songs_titles = [] # 새로 추가될 곡들의 제목 리스트
+    total_songs_to_add = len(entries_to_process)
+    
+
+    if total_songs_to_add > 1:
+        await ctx.send(f"📚 총 {total_songs_to_add}개의 곡이 대기열에 추가됩니다. 잠시만 기다려주세요!")
+
+    for i, entry in enumerate(entries_to_process):
+        url = entry.get("url")
+        title = entry.get('title', 'Unknown title')
+        duration = entry.get('duration')
+
+        if url is None:
+            await ctx.send(f"❌ '{title}'에 대한 스트림 URL을 찾을 수 없습니다. (yt_dlp URL 없음 오류)")
+            continue
+
+        song_info = {"title": title, "url": url, "duration": duration}
+
+        # 첫 번째 곡이고 봇이 현재 재생 중이거나 일시정지 상태가 아니라면 바로 재생
+        if i == 0 and not vc.is_playing() and not vc.is_paused() and current_song is None:
+            try:
+                source = await discord.FFmpegOpusAudio.from_probe(
+                    url,
+                    executable="/opt/homebrew/bin/ffmpeg",
+                    before_options="-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 10 -timeout 5000000 -user_agent \"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/100.0.4896.127 Safari/537.36\"",
+                    options="-vn"
                 )
-        
-        except Exception as e:
-            print("⚠️ FFmpeg probe 실패, fallback 중:", e)
+            except Exception as e:
+                print(f"FFmpeg probe 실패, fallback 중 (play_command 첫 곡): {e}")
+                source = discord.FFmpegOpusAudio(
+                    url,
+                    executable="/opt/homebrew/bin/ffmpeg",
+                    before_options="-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 10 -timeout 5000000 -user_agent \"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/100.0.4896.127 Safari/537.36\"",
+                    options="-vn"
+                )
 
-            source = discord.FFmpegOpusAudio(url,
-            executable="/opt/homebrew/bin/ffmpeg",
-            before_options="-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5",
-            options="-vn"
-            )
-
-        if not ctx.voice_client.is_playing():
-            current_song = title
-            ctx.voice_client.play(
-                source,
-                after = lambda e: asyncio.run_coroutine_threadsafe(play_next(ctx), bot.loop)
-            )
+            current_song = song_info
+            # after 콜백에서 play_next 호출 시 self가 없으므로 bot.loop를 명시
+            vc.play(source, after=lambda e: asyncio.run_coroutine_threadsafe(play_next(ctx), bot.loop))
             await ctx.send(f"▶️ **{title}** 재생 중입니다!")
-        
         else:
-            music_queue.append(
-                {"url": url, "title": title}
+            # 첫 곡이 아니거나 이미 재생 중인 경우 대기열에 추가
+            music_queue.append(song_info)
+            newly_added_songs_titles.append(title) # 추가된 곡 제목 리스트에 추가
+
+    # 모든 곡 추가 작업이 끝난 후 요약 메시지 (코드 블록 사용)
+    if len(newly_added_songs_titles) > 0:
+        if len(newly_added_songs_titles) == 1:
+            await ctx.send(f"➕ **{newly_added_songs_titles[0]}** 대기열에 추가됐어요!")
+        else:
+            display_limit = 10 # 코드 블록에 표시할 최대 곡 수
+            songs_to_display = newly_added_songs_titles[:display_limit]
+            
+            formatted_list = "\n".join([f"{idx+1}. {title}" for idx, title in enumerate(songs_to_display)])
+
+            if len(newly_added_songs_titles) > display_limit:
+                formatted_list += f"\n... 외 {len(newly_added_songs_titles) - display_limit}곡"
+            
+            await ctx.send(
+                f"📚 **총 {len(newly_added_songs_titles)}곡**이 대기열에 추가됐어요!\n"
+                f"```\n{formatted_list}\n```" # 코드 블록으로 묶기
             )
-            await ctx.send(f"➕ **{title}** 대기열에 추가됐어요!")
+
 
 #play_next
 async def play_next(ctx):
-    global current_song
+    global current_song, music_queue
+
     if music_queue:
         next_song = music_queue.pop(0)
-        current_song = next_song["title"]
+        current_song = next_song
 
         try:
             source = discord.FFmpegOpusAudio(
                 next_song["url"],
                 executable="/opt/homebrew/bin/ffmpeg",
-                before_options="-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5",
+                before_options="-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 10 -timeout 5000000 -user_agent \"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/100.0.4896.127 Safari/537.36\"",
                 options="-vn"
             )
 
@@ -248,7 +353,7 @@ async def play_next(ctx):
 
             try:
                 vc.play(source, after=lambda e: asyncio.run_coroutine_threadsafe(play_next(ctx), bot.loop))
-                await ctx.send(f"▶️ **{current_song}** 재생 중입니다!")
+                await ctx.send(f"▶️ **{current_song['title']}** 재생 중입니다!")
             except Exception as e:
                 print(f"오디오 재생 실패: {e}")
                 await ctx.send("❌ 다음 곡 재생 중 오류가 발생했어요.")
@@ -262,10 +367,10 @@ async def play_next(ctx):
 
 
 #queue
-@bot.command(name="queue")
+@bot.command(name="queue", aliases=["list"])
 @is_music_channel()
 async def queue_command(ctx):
-    global current_song
+    global current_song, music_queue
 
     if not ctx.voice_client or not ctx.voice_client.is_connected():
         await ctx.send("❌ 봇이 음성 채널에 접속되어 있지 않아요.")
@@ -274,22 +379,63 @@ async def queue_command(ctx):
     if not ctx.voice_client.is_playing() and not music_queue:
         await ctx.send("🎶 현재 재생 중인 곡이나 대기열이 없습니다.")
         return
+    
+    response_lines = []
 
-    msg = "🎵 **현재 재생 중:**\n"
-    if ctx.voice_client.is_playing():
-        # 플레이 중인 곡 제목은 따로 저장(예: current_song)
-        msg += f"▶️ {current_song}\n"
+    response_lines.append("🎵 **현재 재생 중:**")
+    if current_song and ctx.voice_client.is_playing(): # current_song이 있고 재생 중일 때
+        current_duration_formatted = format_duration(current_song.get('duration'))#노래 분, 초 가져오기
+        response_lines.append(f"▶️ **{current_song['title']}** ({current_duration_formatted})")
     else:
-        msg += "▶️ 없음\n"
+        response_lines.append("▶️ 없음")
 
+    # 대기열 표시
     if music_queue:
-        msg += "\n📜 **대기열:**\n"
-        for i, song in enumerate(music_queue[:10], start=1):
-            msg += f"{i}. {song['title']}\n"
-    else:
-        msg += "\n📜 대기열이 비어 있어요."
+        response_lines.append("\n📜 **대기열:**")
+        
+        # 코드 블록에 표시할 최대 곡 수
+        display_limit = 15
+        songs_to_display = music_queue[:display_limit]
+        
+        # 대기열 목록을 줄바꿈으로 연결하여 코드 블록에 넣을 문자열 생성
+        formatted_queue_list_items = []
+        
+        #최대길이
+        max_title_length = 40
 
-    await ctx.send(msg)
+        max_idx_digits = len(str(display_limit))
+
+        for idx, song in enumerate(songs_to_display):
+            duration_formatted = format_duration(song.get('duration'))
+            title = song['title']
+            #노래 제목이 최대길이 넘으면 자르고 점 붙히기
+            if len(title) > max_title_length:
+                title = title[:max_title_length - 3] + "···"
+            
+            padded_idx_str = f"{idx+1:>{max_idx_digits}}"
+            padded_title_str = f"{title:<{max_title_length}}"
+
+            #조합 - 이 한 줄만 for 루프 안에 있어야 합니다!
+            formatted_queue_list_items.append(f"{padded_idx_str}. {padded_title_str} {duration_formatted}")
+
+        # 여기가 중요! formatted_queue_list_items 리스트를 하나의 문자열로 합쳐서 formatted_queue_list에 저장
+        formatted_queue_list = "\n".join(formatted_queue_list_items) # 이 줄이 누락되어 있었습니다!
+        
+        # 코드 블록 시작
+        response_lines.append("```")
+        response_lines.append(formatted_queue_list) # 여기는 formatted_queue_list 변수를 사용합니다.
+
+        if len(music_queue) > display_limit:
+            response_lines.append(f"... 외 {len(music_queue) - display_limit}곡")
+        
+        # 코드 블록 끝
+        response_lines.append("```")
+    else:
+        response_lines.append("\n📜 대기열이 비어 있어요.")
+
+    # 모든 라인을 합쳐서 메시지 전송
+    await ctx.send("\n".join(response_lines))
+
 
 #pause
 @bot.command(name="pause")
@@ -332,6 +478,7 @@ async def stop_command(ctx):
 
     # 채널 나가기
     await ctx.voice_client.disconnect()
+    reset_music_state()
     await ctx.send("⏹️ 재생을 중지하고 음성 채널에서 나갔어요.")
 
         
@@ -358,7 +505,7 @@ async def resume_command(ctx):
         await ctx.send("⚠️ 현재 재생 중인 노래가 없어요.")
 
 #next_song
-@bot.command(name="next")
+@bot.command(name="next", aliases=["skip"])
 @is_music_channel()
 async def next_command(ctx):
     if not ctx.author.voice or not ctx.author.voice.channel:
@@ -383,13 +530,54 @@ async def next_command(ctx):
     else:
         await ctx.send("⚠️ 현재 재생 중인 노래가 없어요.")
 
-#previous_song(back)
+
+#previous_song(back) -> 나중에 할 것 복잡함
+
+
 #shuffle
-#all_repeat
-#one_repeat
-#playlist
+@bot.command(name="shuffle")
+@is_music_channel()
+async def shuffle_command(ctx):
+    global music_queue
+
+    if not ctx.author.voice or not ctx.author.voice.channel:
+        await ctx.send("❌ 먼저 음성 채널에 접속해주세요.")
+        return
+
+    if len(music_queue)<= 1:
+        await ctx.send("⚠️ 셔플할 대기열이 충분하지 않아요.")
+        return
+    
+    random.shuffle(music_queue)
+
+    await ctx.send("🔀 재생 대기열이 셔플됐어요!")
+    await queue_command(ctx) #셔플 후 큐 부르기
+
+#repeat
+@bot.command(name="repeat")
+@is_music_channel()
+async def repeat_mode_toggle(ctx, mode: str = None):
+    global repeat_mode
+
+    if not ctx.author.voice or not ctx.author.voice.channel:
+        await ctx.send("❌ 먼저 음성 채널에 접속해주세요.")
+        return
+
+    if mode == "one":
+        repeat_mode = "one"
+        await ctx.send("🔁 현재 곡 반복 모드로 설정됐어요!")
+    elif mode == "all":
+        repeat_mode = "all"
+        await ctx.send("🔂 전체 큐 반복 모드로 설정됐어요!")
+    elif mode == "off":
+        repeat_mode = None
+        await ctx.send("⏹️ 반복 모드를 끄겠습니다.")
+    else:
+        await ctx.send("❓ 사용법: `+repeat one`, `+repeat all`, `+repeat off`")
+
+
+
 #emoji_control
-#skip
 #auto_leave
 #delete_song
 #delete_all
