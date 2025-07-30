@@ -9,6 +9,8 @@ import yt_dlp
 from discord.ext.commands import check, CheckFailure
 from discord.utils import get
 import random
+from datetime import datetime
+import re
 
 executor = ThreadPoolExecutor(max_workers=5) # 워커 수는 필요에 따라 조절
 
@@ -204,6 +206,130 @@ async def join_command(ctx):
 
 
 # #play 기능
+# @bot.command(name="play")
+# @is_music_channel()
+# async def play_command(ctx, *, search: str):
+#     global music_queue, current_song
+
+#     if not ctx.author.voice or not ctx.author.voice.channel:
+#         await ctx.send("❌ 먼저 음성 채널에 접속해주세요.")
+#         return
+    
+#     voice_channel = ctx.author.voice.channel
+
+#     if ctx.voice_client is None:
+#         vc = await voice_channel.connect()
+#     else:
+#         vc = ctx.voice_client
+#         if vc.channel != voice_channel:
+#             await vc.move_to(voice_channel)
+#     processing_message = await ctx.send("🔄 노래 정보를 가져오는 중이에요... 잠시만 기다려주세요! \n플레이리스트라면 오래 걸릴 수 있어요!")
+#     ydl_option = {
+#         'format': "bestaudio[ext=webm]+bestaudio[ext=mp4]/bestaudio/best",
+#         #'noplaylist': True, # 플레이리스트 전체를 막으려면 이 주석을 해제
+#         'quiet': True,
+#         'default_search': 'ytsearch',
+#         'extract_flat': 'in_playlist' # 플레이리스트의 경우 URL만 빠르게 추출
+#     }
+    
+#     try:
+#         loop = asyncio.get_event_loop()
+#         with yt_dlp.YoutubeDL(ydl_option) as ydl:
+#             info = await loop.run_in_executor(executor, lambda: ydl.extract_info(search, download=False))
+            
+#         entries_to_process = []
+
+#         if 'entries' in info and info['entries']:
+#             for entry_item in info['entries']:
+#                 if entry_item.get('_type') == 'url':
+#                     try:
+#                         nested_info = await loop.run_in_executor(executor, lambda: ydl.extract_info(entry_item['url'], download=False))
+#                         entries_to_process.append(nested_info)
+#                     except Exception as nested_e:
+#                         print(f"플레이리스트 항목 상세 정보 추출 실패: {entry_item.get('title', 'Unknown Title')} - {nested_e}")
+#                         await processing_message.edit(content=f"⚠️ 플레이리스트 항목 '{entry_item.get('title', 'Unknown')}'을(를) 처리하지 못했습니다.") # 오류 발생 시 메시지 수정
+#                         continue
+#                 else: #그 외
+#                     entries_to_process.append(entry_item)
+#         elif 'url' in info:
+#             entries_to_process.append(info)
+#         else:
+#             await processing_message.edit(content="❌ 검색 결과가 없습니다.") # 오류 발생 시 메시지 수정
+#             return
+        
+#         if not entries_to_process:
+#             await processing_message.edit(content="❌ 검색 결과가 없습니다.") # 오류 발생 시 메시지 수정
+#             return
+
+#     except Exception as e:
+#         print(f"yt_dlp 예외: {e}")
+#         await processing_message.edit(content="❌ 유효한 URL 또는 검색어를 입력해주세요. (YouTube에서 찾을 수 없거나 접근 문제)") # 오류 발생 시 메시지 수정
+#         return
+    
+#     await processing_message.delete() # 모든 정보 추출 성공 시 메시지 삭제
+
+#     newly_added_songs_titles = [] # 새로 추가될 곡들의 제목 리스트
+#     total_songs_to_add = len(entries_to_process)
+    
+
+#     if total_songs_to_add > 1:
+#         await ctx.send(f"📚 총 {total_songs_to_add}개의 곡이 대기열에 추가됩니다. 잠시만 기다려주세요!")
+
+#     for i, entry in enumerate(entries_to_process):
+#         url = entry.get("url")
+#         title = entry.get('title', 'Unknown title')
+#         duration = entry.get('duration')
+
+#         if url is None:
+#             await ctx.send(f"❌ '{title}'에 대한 스트림 URL을 찾을 수 없습니다. (yt_dlp URL 없음 오류)")
+#             continue
+
+#         song_info = {"title": title, "url": url, "duration": duration}
+
+#         # 첫 번째 곡이고 봇이 현재 재생 중이거나 일시정지 상태가 아니라면 바로 재생
+#         if i == 0 and not vc.is_playing() and not vc.is_paused() and current_song is None:
+#             try:
+#                 source = await discord.FFmpegOpusAudio.from_probe(
+#                     url,
+#                     executable="/opt/homebrew/bin/ffmpeg",
+#                     before_options="-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 10 -timeout 5000000 -user_agent \"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/100.0.4896.127 Safari/537.36\"",
+#                     options="-vn"
+#                 )
+#             except Exception as e:
+#                 print(f"FFmpeg probe 실패, fallback 중 (play_command 첫 곡): {e}")
+#                 source = discord.FFmpegOpusAudio(
+#                     url,
+#                     executable="/opt/homebrew/bin/ffmpeg",
+#                     before_options="-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 10 -timeout 5000000 -user_agent \"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/100.0.4896.127 Safari/537.36\"",
+#                     options="-vn"
+#                 )
+
+#             current_song = song_info
+#             # after 콜백에서 play_next 호출 시 self가 없으므로 bot.loop를 명시
+#             vc.play(source, after=lambda e: asyncio.run_coroutine_threadsafe(play_next(ctx), bot.loop))
+#             await ctx.send(f"▶️ **{title}** 재생 중입니다!")
+#         else:
+#             # 첫 곡이 아니거나 이미 재생 중인 경우 대기열에 추가
+#             music_queue.append(song_info)
+#             newly_added_songs_titles.append(title) # 추가된 곡 제목 리스트에 추가
+
+#     # 모든 곡 추가 작업이 끝난 후 요약 메시지 (코드 블록 사용)
+#     if len(newly_added_songs_titles) > 0:
+#         if len(newly_added_songs_titles) == 1:
+#             await ctx.send(f"➕ **{newly_added_songs_titles[0]}** 대기열에 추가됐어요!")
+#         else:
+#             display_limit = 10 # 코드 블록에 표시할 최대 곡 수
+#             songs_to_display = newly_added_songs_titles[:display_limit]
+            
+#             formatted_list = "\n".join([f"{idx+1}. {title}" for idx, title in enumerate(songs_to_display)])
+
+#             if len(newly_added_songs_titles) > display_limit:
+#                 formatted_list += f"\n... 외 {len(newly_added_songs_titles) - display_limit}곡"
+            
+#             await ctx.send(
+#                 f"📚 **총 {len(newly_added_songs_titles)}곡**이 대기열에 추가됐어요!\n"
+#                 f"```\n{formatted_list}\n```" # 코드 블록으로 묶기
+#             )
 @bot.command(name="play")
 @is_music_channel()
 async def play_command(ctx, *, search: str):
@@ -213,6 +339,16 @@ async def play_command(ctx, *, search: str):
         await ctx.send("❌ 먼저 음성 채널에 접속해주세요.")
         return
     
+    youtube_url_pattern = re.compile(
+        r'^(https?://)?(www\.)?(youtube\.com|youtu\.be|music\.youtube\.com)/.+$'
+    )
+    
+    is_url = search.startswith('http://') or search.startswith('https://')
+
+    if is_url and not youtube_url_pattern.match(search):
+        await ctx.send("❌ 지원되지 않는 URL 형식이에요. YouTube 또는 YouTube Music 동영상/재생 목록 URL을 입력해주세요. 아니면 검색어를 입력해주세요.")
+        return
+
     voice_channel = ctx.author.voice.channel
 
     if ctx.voice_client is None:
@@ -221,13 +357,26 @@ async def play_command(ctx, *, search: str):
         vc = ctx.voice_client
         if vc.channel != voice_channel:
             await vc.move_to(voice_channel)
+    
     processing_message = await ctx.send("🔄 노래 정보를 가져오는 중이에요... 잠시만 기다려주세요! \n플레이리스트라면 오래 걸릴 수 있어요!")
+    
+    # yt_dlp 옵션 수정: thumbnail과 artist 정보도 가져오도록 설정
     ydl_option = {
         'format': "bestaudio[ext=webm]+bestaudio[ext=mp4]/bestaudio/best",
-        #'noplaylist': True, # 플레이리스트 전체를 막으려면 이 주석을 해제
         'quiet': True,
         'default_search': 'ytsearch',
-        'extract_flat': 'in_playlist' # 플레이리스트의 경우 URL만 빠르게 추출
+        'extract_flat': False,
+        'force_generic_extractor': True,
+        'cachedir': False,
+        'no_warnings': True,
+        'postprocessors': [{
+            'key': 'FFmpegExtractAudio',
+            'preferredcodec': 'opus',
+            'preferredquality': '192',
+        }],
+        'writes_thumbnail': True, # 썸네일 정보 가져오기 활성화
+        'writedescription': True, # 아티스트 정보 등을 위해 설명 가져오기 활성화
+        'getcomments': False,
     }
     
     try:
@@ -239,36 +388,26 @@ async def play_command(ctx, *, search: str):
 
         if 'entries' in info and info['entries']:
             for entry_item in info['entries']:
-                if entry_item.get('_type') == 'url':
-                    try:
-                        nested_info = await loop.run_in_executor(executor, lambda: ydl.extract_info(entry_item['url'], download=False))
-                        entries_to_process.append(nested_info)
-                    except Exception as nested_e:
-                        print(f"플레이리스트 항목 상세 정보 추출 실패: {entry_item.get('title', 'Unknown Title')} - {nested_e}")
-                        await processing_message.edit(content=f"⚠️ 플레이리스트 항목 '{entry_item.get('title', 'Unknown')}'을(를) 처리하지 못했습니다.") # 오류 발생 시 메시지 수정
-                        continue
-                else: #그 외
-                    entries_to_process.append(entry_item)
+                entries_to_process.append(entry_item)
         elif 'url' in info:
             entries_to_process.append(info)
         else:
-            await processing_message.edit(content="❌ 검색 결과가 없습니다.") # 오류 발생 시 메시지 수정
+            await processing_message.edit(content="❌ 검색 결과가 없습니다.")
             return
         
         if not entries_to_process:
-            await processing_message.edit(content="❌ 검색 결과가 없습니다.") # 오류 발생 시 메시지 수정
+            await processing_message.edit(content="❌ 검색 결과가 없습니다.")
             return
 
     except Exception as e:
         print(f"yt_dlp 예외: {e}")
-        await processing_message.edit(content="❌ 유효한 URL 또는 검색어를 입력해주세요. (YouTube에서 찾을 수 없거나 접근 문제)") # 오류 발생 시 메시지 수정
+        await processing_message.edit(content="❌ 노래 정보를 가져오는 데 문제가 발생했습니다. 유효한 YouTube 링크 또는 검색어를 다시 확인해주세요.")
         return
     
-    await processing_message.delete() # 모든 정보 추출 성공 시 메시지 삭제
+    await processing_message.delete()
 
-    newly_added_songs_titles = [] # 새로 추가될 곡들의 제목 리스트
+    newly_added_songs_titles = []
     total_songs_to_add = len(entries_to_process)
-    
 
     if total_songs_to_add > 1:
         await ctx.send(f"📚 총 {total_songs_to_add}개의 곡이 대기열에 추가됩니다. 잠시만 기다려주세요!")
@@ -277,46 +416,91 @@ async def play_command(ctx, *, search: str):
         url = entry.get("url")
         title = entry.get('title', 'Unknown title')
         duration = entry.get('duration')
+        thumbnail_url = entry.get('thumbnail') # 썸네일 URL
+        artist = entry.get('artist') or entry.get('channel') or 'Unknown Artist'
+
+        # --- 디버그를 위한 print 추가 ---
+        print(f"DEBUG: Song Info for '{title}':")
+        print(f"  URL: {url}")
+        print(f"  Duration: {duration}")
+        print(f"  Thumbnail URL: {thumbnail_url}") # <- 이 부분 확인!
+        print(f"  Artist: {artist}")
+        # --- 디버그 print 끝 ---
 
         if url is None:
             await ctx.send(f"❌ '{title}'에 대한 스트림 URL을 찾을 수 없습니다. (yt_dlp URL 없음 오류)")
             continue
 
-        song_info = {"title": title, "url": url, "duration": duration}
+        song_info = {
+            "title": title,
+            "url": url,
+            "duration": duration,
+            "thumbnail": thumbnail_url,
+            "artist": artist
+        }
 
-        # 첫 번째 곡이고 봇이 현재 재생 중이거나 일시정지 상태가 아니라면 바로 재생
         if i == 0 and not vc.is_playing() and not vc.is_paused() and current_song is None:
             try:
-                source = await discord.FFmpegOpusAudio.from_probe(
-                    url,
+                ydl_opts_stream = {
+                    'format': "bestaudio[ext=webm]+bestaudio[ext=mp4]/bestaudio/best",
+                    'quiet': True,
+                    'no_warnings': True,
+                    'cachedir': False,
+                }
+                loop = asyncio.get_event_loop()
+                with yt_dlp.YoutubeDL(ydl_opts_stream) as ydl_stream:
+                    stream_info = await loop.run_in_executor(executor, lambda: ydl_stream.extract_info(url, download=False))
+                    stream_url = stream_info.get('url')
+
+                if not stream_url:
+                    await ctx.send(f"❌ **{title}** 스트림을 가져올 수 없어 재생할 수 없습니다.")
+                    print(f"DEBUG: 첫 곡 스트림 URL 없음 - {title}")
+                    asyncio.run_coroutine_threadsafe(play_next(ctx), bot.loop)
+                    return
+
+                source = discord.FFmpegOpusAudio(
+                    stream_url,
                     executable="/opt/homebrew/bin/ffmpeg",
                     before_options="-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 10 -timeout 5000000 -user_agent \"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/100.0.4896.127 Safari/537.36\"",
                     options="-vn"
                 )
+
             except Exception as e:
                 print(f"FFmpeg probe 실패, fallback 중 (play_command 첫 곡): {e}")
-                source = discord.FFmpegOpusAudio(
-                    url,
-                    executable="/opt/homebrew/bin/ffmpeg",
-                    before_options="-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 10 -timeout 5000000 -user_agent \"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/100.0.4896.127 Safari/537.36\"",
-                    options="-vn"
-                )
+                await ctx.send(f"❌ **{title}** 재생 중 오류가 발생하여 건너뜁니다.")
+                asyncio.run_coroutine_threadsafe(play_next(ctx), bot.loop)
+                return
 
             current_song = song_info
-            # after 콜백에서 play_next 호출 시 self가 없으므로 bot.loop를 명시
             vc.play(source, after=lambda e: asyncio.run_coroutine_threadsafe(play_next(ctx), bot.loop))
-            await ctx.send(f"▶️ **{title}** 재생 중입니다!")
-        else:
-            # 첫 곡이 아니거나 이미 재생 중인 경우 대기열에 추가
-            music_queue.append(song_info)
-            newly_added_songs_titles.append(title) # 추가된 곡 제목 리스트에 추가
+            
+            embed = discord.Embed(
+                title="현재 재생 중",
+                description=f"**[{title}]({url})**",
+                color=discord.Color.green()
+            )
+            
+            if artist and artist != 'Unknown Artist':
+                embed.add_field(name="아티스트", value=artist, inline=True)
+            
+            if duration:
+                embed.add_field(name="재생 시간", value=format_duration(duration), inline=True)
+            
+            if thumbnail_url:
+                embed.set_image(url=thumbnail_url) # 앨범 아트 (유튜브 썸네일)
+            
+            embed.set_footer(text=f"idiotbot | {datetime.now().strftime('%Y-%m-%d %H:%M')}", icon_url=bot.user.avatar.url)
 
-    # 모든 곡 추가 작업이 끝난 후 요약 메시지 (코드 블록 사용)
+            await ctx.send(embed=embed)
+        else:
+            music_queue.append(song_info)
+            newly_added_songs_titles.append(title)
+
     if len(newly_added_songs_titles) > 0:
         if len(newly_added_songs_titles) == 1:
             await ctx.send(f"➕ **{newly_added_songs_titles[0]}** 대기열에 추가됐어요!")
         else:
-            display_limit = 10 # 코드 블록에 표시할 최대 곡 수
+            display_limit = 10
             songs_to_display = newly_added_songs_titles[:display_limit]
             
             formatted_list = "\n".join([f"{idx+1}. {title}" for idx, title in enumerate(songs_to_display)])
@@ -326,11 +510,44 @@ async def play_command(ctx, *, search: str):
             
             await ctx.send(
                 f"📚 **총 {len(newly_added_songs_titles)}곡**이 대기열에 추가됐어요!\n"
-                f"```\n{formatted_list}\n```" # 코드 블록으로 묶기
+                f"```\n{formatted_list}\n```"
             )
 
-
 #play_next
+# async def play_next(ctx):
+#     global current_song, music_queue
+
+#     if music_queue:
+#         next_song = music_queue.pop(0)
+#         current_song = next_song
+
+#         try:
+#             source = discord.FFmpegOpusAudio(
+#                 next_song["url"],
+#                 executable="/opt/homebrew/bin/ffmpeg",
+#                 before_options="-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 10 -timeout 5000000 -user_agent \"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/100.0.4896.127 Safari/537.36\"",
+#                 options="-vn"
+#             )
+
+#             vc = discord.utils.get(bot.voice_clients, guild=ctx.guild)
+#             if not vc or not vc.is_connected():
+#                 await ctx.send("❌ 봇이 음성 채널에 연결되어 있지 않아요.")
+#                 return
+
+#             try:
+#                 vc.play(source, after=lambda e: asyncio.run_coroutine_threadsafe(play_next(ctx), bot.loop))
+#                 await ctx.send(f"▶️ **{current_song['title']}** 재생 중입니다!")
+#             except Exception as e:
+#                 print(f"오디오 재생 실패: {e}")
+#                 await ctx.send("❌ 다음 곡 재생 중 오류가 발생했어요.")
+
+#         except Exception as e:
+#             print(f"FFmpeg 로딩 실패: {e}")
+#             await ctx.send("❌ 오디오 스트림을 불러오는 데 실패했어요.")
+#             current_song = None
+#     else:
+#         current_song = None
+#play_next 수정
 async def play_next(ctx):
     global current_song, music_queue
 
@@ -338,32 +555,77 @@ async def play_next(ctx):
         next_song = music_queue.pop(0)
         current_song = next_song
 
+        vc = discord.utils.get(bot.voice_clients, guild=ctx.guild)
+        if not vc or not vc.is_connected():
+            await ctx.send("❌ 봇이 음성 채널에 연결되어 있지 않아요.")
+            current_song = None
+            return
+
         try:
+            ydl_opts_stream = {
+                'format': "bestaudio[ext=webm]+bestaudio[ext=mp4]/bestaudio/best",
+                'quiet': True,
+                'no_warnings': True,
+                'cachedir': False,
+                'extract_flat': False,
+            }
+            loop = asyncio.get_event_loop()
+            with yt_dlp.YoutubeDL(ydl_opts_stream) as ydl:
+                stream_info = await loop.run_in_executor(executor, lambda: ydl.extract_info(next_song["url"], download=False))
+                stream_url = stream_info.get('url')
+
+            if not stream_url:
+                await ctx.send(f"❌ **{next_song['title']}** (URL 없음) 스트림을 가져올 수 없어 건너뜁니다.")
+                print(f"DEBUG: 스트림 URL 없음 - {next_song['title']}")
+                asyncio.run_coroutine_threadsafe(play_next(ctx), bot.loop)
+                return
+
             source = discord.FFmpegOpusAudio(
-                next_song["url"],
+                stream_url,
                 executable="/opt/homebrew/bin/ffmpeg",
                 before_options="-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 10 -timeout 5000000 -user_agent \"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/100.0.4896.127 Safari/537.36\"",
                 options="-vn"
             )
 
-            vc = discord.utils.get(bot.voice_clients, guild=ctx.guild)
-            if not vc or not vc.is_connected():
-                await ctx.send("❌ 봇이 음성 채널에 연결되어 있지 않아요.")
-                return
-
             try:
                 vc.play(source, after=lambda e: asyncio.run_coroutine_threadsafe(play_next(ctx), bot.loop))
-                await ctx.send(f"▶️ **{current_song['title']}** 재생 중입니다!")
+                
+                embed = discord.Embed(
+                    title="다음 곡 재생 중",
+                    description=f"**[{next_song['title']}]({next_song['url']})**",
+                    color=discord.Color.blue()
+                )
+                if next_song.get('artist') and next_song.get('artist') != 'Unknown Artist':
+                    embed.add_field(name="아티스트", value=next_song['artist'], inline=True)
+                if next_song.get('duration'):
+                    embed.add_field(name="재생 시간", value=format_duration(next_song['duration']), inline=True)
+                
+                thumbnail_url_next = next_song.get('thumbnail') # <- 썸네일 URL 가져오기
+                # --- 디버그를 위한 print 추가 ---
+                print(f"DEBUG: Play Next Song Info for '{next_song['title']}':")
+                print(f"  Thumbnail URL: {thumbnail_url_next}") # <- 이 부분 확인!
+                # --- 디버그 print 끝 ---
+
+                if thumbnail_url_next: # <- 썸네일 URL이 있을 경우에만 설정
+                    embed.set_image(url=thumbnail_url_next)
+                
+                embed.set_footer(text=f"idiotbot | {datetime.now().strftime('%Y-%m-%d %H:%M')}", icon_url=bot.user.avatar.url)
+                
+                await ctx.send(embed=embed)
+
             except Exception as e:
-                print(f"오디오 재생 실패: {e}")
-                await ctx.send("❌ 다음 곡 재생 중 오류가 발생했어요.")
+                print(f"오디오 재생 실패 (play_next): {e}")
+                await ctx.send(f"❌ **{next_song['title']}** 재생 중 오류가 발생하여 건너뜁니다.")
+                asyncio.run_coroutine_threadsafe(play_next(ctx), bot.loop)
 
         except Exception as e:
-            print(f"FFmpeg 로딩 실패: {e}")
-            await ctx.send("❌ 오디오 스트림을 불러오는 데 실패했어요.")
+            print(f"FFmpeg 로딩 실패 (play_next): {e}")
+            await ctx.send(f"❌ **{next_song['title']}** 스트림을 불러오는 데 실패하여 건너뜁니다.")
             current_song = None
+            asyncio.run_coroutine_threadsafe(play_next(ctx), bot.loop)
     else:
         current_song = None
+        await ctx.send("🎶 대기열이 모두 비었습니다.")
 
 
 #queue
@@ -415,25 +677,25 @@ async def queue_command(ctx):
             padded_idx_str = f"{idx+1:>{max_idx_digits}}"
             padded_title_str = f"{title:<{max_title_length}}"
 
-            #조합 - 이 한 줄만 for 루프 안에 있어야 합니다!
+            #조합
             formatted_queue_list_items.append(f"{padded_idx_str}. {padded_title_str} {duration_formatted}")
 
-        # 여기가 중요! formatted_queue_list_items 리스트를 하나의 문자열로 합쳐서 formatted_queue_list에 저장
-        formatted_queue_list = "\n".join(formatted_queue_list_items) # 이 줄이 누락되어 있었습니다!
+        # formatted_queue_list_items 리스트를 하나의 문자열로 합쳐서 formatted_queue_list에 저장
+        formatted_queue_list = "\n".join(formatted_queue_list_items)
         
         # 코드 블록 시작
         response_lines.append("```")
-        response_lines.append(formatted_queue_list) # 여기는 formatted_queue_list 변수를 사용합니다.
+        response_lines.append(formatted_queue_list)
 
         if len(music_queue) > display_limit:
             response_lines.append(f"... 외 {len(music_queue) - display_limit}곡")
         
-        # 코드 블록 끝
+        #코드 블록 끝
         response_lines.append("```")
     else:
         response_lines.append("\n📜 대기열이 비어 있어요.")
 
-    # 모든 라인을 합쳐서 메시지 전송
+    #합쳐서 메시지 전송
     await ctx.send("\n".join(response_lines))
 
 
