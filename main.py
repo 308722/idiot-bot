@@ -460,7 +460,8 @@ async def play_command(ctx, *, search: str):
 
                 source = discord.FFmpegOpusAudio(
                     stream_url,
-                    executable="/opt/homebrew/bin/ffmpeg",
+                    #executable="/opt/homebrew/bin/ffmpeg", 서버에 올리기 위해 경로 변결
+                    executable="ffmpeg",
                     before_options="-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 10 -timeout 5000000 -user_agent \"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/100.0.4896.127 Safari/537.36\"",
                     options="-vn"
                 )
@@ -582,7 +583,8 @@ async def play_next(ctx):
 
             source = discord.FFmpegOpusAudio(
                 stream_url,
-                executable="/opt/homebrew/bin/ffmpeg",
+                #executable="/opt/homebrew/bin/ffmpeg", 호스팅을 위한 경로 변경
+                executable="ffmpeg",
                 before_options="-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 10 -timeout 5000000 -user_agent \"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/100.0.4896.127 Safari/537.36\"",
                 options="-vn"
             )
