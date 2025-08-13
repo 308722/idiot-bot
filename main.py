@@ -44,7 +44,7 @@ if not os.path.exists(CONFIG_FILE):
 def load_config():
     try:
         with open(CONFIG_FILE, 'r') as f:
-            return json.load(f)  # ✅ 바로 JSON 파싱
+            return json.load(f)  # JSON 파싱
     except (json.JSONDecodeError, FileNotFoundError):
         return {}
 
@@ -330,6 +330,7 @@ async def join_command(ctx):
 #                 f"📚 **총 {len(newly_added_songs_titles)}곡**이 대기열에 추가됐어요!\n"
 #                 f"```\n{formatted_list}\n```" # 코드 블록으로 묶기
 #             )
+
 @bot.command(name="play")
 @is_music_channel()
 async def play_command(ctx, *, search: str):
@@ -340,9 +341,7 @@ async def play_command(ctx, *, search: str):
         return
     
     youtube_url_pattern = re.compile(
-        r'^(https?://)?(www\.)?(youtube\.com|youtu\.be|music\.youtube\.com)/.+$'
-    )
-    
+        r'^(https?://)?(www\.)?(youtube\.com|youtu\.be|music\.youtube\.com)/.+$')
     is_url = search.startswith('http://') or search.startswith('https://')
 
     if is_url and not youtube_url_pattern.match(search):
@@ -419,13 +418,11 @@ async def play_command(ctx, *, search: str):
         thumbnail_url = entry.get('thumbnail') # 썸네일 URL
         artist = entry.get('artist') or entry.get('channel') or 'Unknown Artist'
 
-        # --- 디버그를 위한 print 추가 ---
         print(f"DEBUG: Song Info for '{title}':")
         print(f"  URL: {url}")
         print(f"  Duration: {duration}")
-        print(f"  Thumbnail URL: {thumbnail_url}") # <- 이 부분 확인!
+        print(f"  Thumbnail URL: {thumbnail_url}")
         print(f"  Artist: {artist}")
-        # --- 디버그 print 끝 ---
 
         if url is None:
             await ctx.send(f"❌ '{title}'에 대한 스트림 URL을 찾을 수 없습니다. (yt_dlp URL 없음 오류)")
@@ -548,6 +545,7 @@ async def play_command(ctx, *, search: str):
 #             current_song = None
 #     else:
 #         current_song = None
+
 #play_next 수정
 async def play_next(ctx):
     global current_song, music_queue
